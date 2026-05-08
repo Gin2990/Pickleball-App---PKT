@@ -1,0 +1,41 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Helper for Tournament
+    function isValidTournament(data) {
+      return data.size() >= 1 &&
+             data.stage in ['setup', 'group', 'knockout', 'finished'];
+    }
+
+    function isAdmin() {
+      return isSignedIn() && 
+             request.auth.token.email == 'nguyenduclinhrin@gmail.com' && 
+             request.auth.token.email_verified == true;
+    }
+
+    match /tournaments/{tournamentId} {
+      allow read: if true; 
+      allow create: if isSignedIn() && isValidTournament(request.resource.data);
+      allow update: if isSignedIn();
+      allow delete: if isAdmin() || (isSignedIn() && resource.data.ownerId == request.auth.uid);
+
+      match /{allSubcollections=**} {
+        allow read: if true;
+        allow write: if isSignedIn();
+      }
+    }
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "entities": {
+    "Team": {
+      "title": "Team",
+      "description": "A team of two players in the tournament",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name1": { "type": "string" },
+        "name2": { "type": "string" },
+        "club": { "type": "string" }
+      },
+      "required": ["id", "name1", "name2"]
+    },
+    "Group": {
+      "title": "Group",
+      "description": "A tournament group",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "teamIds": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["id", "name", "teamIds"]
+    },
+    "Match": {
+      "title": "Match",
+      "description": "A tournament match",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "team1Id": { "type": "string" },
+        "team2Id": { "type": "string" },
+        "score1": { "type": "number" },
+        "score2": { "type": "number" },
+        "isCompleted": { "type": "boolean" },
+        "stage": { "type": "string", "enum": ["group", "knockout"] },
+        "groupId": { "type": "string" },
+        "nextMatchId": { "type": "string" }
+      },
+      "required": ["id", "team1Id", "team2Id", "score1", "score2", "isCompleted", "stage"]
+    },
+    "Tournament": {
+      "title": "Tournament",
+      "description": "Overall tournament state",
+      "type": "object",
+      "properties": {
+        "stage": { "type": "string", "enum": ["setup", "group", "knockout", "finished"] },
+        "name": { "type": "string" },
+        "config": {
+          "type": "object",
+          "properties": {
+            "format": { "type": "string" },
+            "teamsPerGroup": { "type": "number" },
+            "advancingPerGroup": { "type": "number" }
+          }
+        }
+      },
+      "required": ["stage"]
+    }
+  },
+  "firestore": {
+    "tournaments/{tournamentId}": {
+      "schema": "Tournament",
+      "description": "Main tournament metadata"
+    },
+    "tournaments/{tournamentId}/teams/{teamId}": {
+      "schema": "Team",
+      "description": "Teams in the tournament"
+    },
+    "tournaments/{tournamentId}/groups/{groupId}": {
+      "schema": "Group",
+      "description": "Groups in the tournament"
+    },
+    "tournaments/{tournamentId}/matches/{matchId}": {
+      "schema": "Match",
+      "description": "Matches in the tournament"
+    }
+  }
+}
