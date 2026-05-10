@@ -403,7 +403,7 @@ export default function App() {
         score1: s1,
         score2: s2,
         isCompleted: true,
-        winnerId: winnerId // Explicitly track winnerId to avoid confusion
+        winnerId: winnerId
       }, { merge: true });
 
       let nextMatchIdx = -1;
@@ -412,16 +412,45 @@ export default function App() {
       if (state.config.knockoutPairing === 'manual' && state.config.manualSlots) {
         // Find if any match in manualSlots uses the current match result as seed
         const sourceStr = `Winner KO-${currentMatchIdx}`;
-        const slotIdx = state.config.manualSlots.indexOf(sourceStr);
-        if (slotIdx !== -1) {
-          nextMatchIdx = Math.floor(slotIdx / 2);
-          slotInNextMatch = (slotIdx % 2) + 1;
-        } else {
-          // If not in manualSlots, it might be heading to the final
-          // Standard final progression:
-          // size=8: 4, 5 -> 6
-          // size=16: 12, 13 -> 14
-          // size=4: 0, 1 -> 2
+        // Important: check all slots as one match output might be used in multiple places (rare but possible)
+        state.config.manualSlots.forEach((slot, idx) => {
+          if (slot === sourceStr) {
+            nextMatchIdx = Math.floor(idx / 2);
+            slotInNextMatch = (idx % 2) + 1;
+            
+            const nextMatchId = `KO-${nextMatchIdx}`;
+            const nextMatch = sortedMatches.find(m => m.id === nextMatchId);
+            const teamKey = slotInNextMatch === 1 ? 'team1Id' : 'team2Id';
+
+            // Always update next match slot to current winner
+            const nextMatchUpdate: any = {
+              [teamKey]: winnerId
+            };
+
+            // If the winner changed (or it's a new completion), and next match is already completed, reset it
+            if (nextMatch && nextMatch.isCompleted && winnerId !== oldWinnerId) {
+              nextMatchUpdate.isCompleted = false;
+              nextMatchUpdate.score1 = 0;
+              nextMatchUpdate.score2 = 0;
+            }
+
+            if (nextMatch) {
+              batch.update(doc(db, 'tournaments', selectedTournamentId!, 'matches', nextMatchId), nextMatchUpdate);
+            } else {
+              batch.set(doc(db, 'tournaments', selectedTournamentId!, 'matches', nextMatchId), {
+                ...nextMatchUpdate,
+                id: nextMatchId,
+                score1: 0,
+                score2: 0,
+                isCompleted: false,
+                stage: 'knockout'
+              });
+            }
+          }
+        });
+        
+        // Check for final match if not manually defined (standard progression)
+        if (nextMatchIdx === -1) {
           if (knockoutSize === 4 && currentMatchIdx < 2) {
             nextMatchIdx = 2;
             slotInNextMatch = (currentMatchIdx % 2) + 1;
@@ -432,9 +461,35 @@ export default function App() {
             nextMatchIdx = 14;
             slotInNextMatch = (currentMatchIdx === 12 ? 1 : 2);
           }
+          
+          if (nextMatchIdx !== -1) {
+            const nextMatchId = `KO-${nextMatchIdx}`;
+            const nextMatch = sortedMatches.find(m => m.id === nextMatchId);
+            const teamKey = slotInNextMatch === 1 ? 'team1Id' : 'team2Id';
+            
+            const nextMatchUpdate: any = { [teamKey]: winnerId };
+            if (nextMatch && nextMatch.isCompleted && winnerId !== oldWinnerId) {
+              nextMatchUpdate.isCompleted = false;
+              nextMatchUpdate.score1 = 0;
+              nextMatchUpdate.score2 = 0;
+            }
+            
+            if (nextMatch) {
+              batch.update(doc(db, 'tournaments', selectedTournamentId!, 'matches', nextMatchId), nextMatchUpdate);
+            } else {
+              batch.set(doc(db, 'tournaments', selectedTournamentId!, 'matches', nextMatchId), {
+                ...nextMatchUpdate,
+                id: nextMatchId,
+                score1: 0,
+                score2: 0,
+                isCompleted: false,
+                stage: 'knockout'
+              });
+            }
+          }
         }
       } else {
-        // Automatic hardcoded progression
+        // Automatic hardcoded progression (same logic with update)
         if (knockoutSize === 4) {
           if (currentMatchIdx < 2) {
             nextMatchIdx = 2;
@@ -816,11 +871,8 @@ export default function App() {
     const [manualSlots, setManualSlots] = useState<string[]>(generateDefaultSlots(4));
     
     useEffect(() => {
-      const requiredSize = getManualSlotsSize(knockoutSize);
-      if (manualSlots.length !== requiredSize) {
-        setManualSlots(generateDefaultSlots(knockoutSize));
-      }
-    }, [knockoutSize]);
+      setManualSlots(generateDefaultSlots(knockoutSize));
+    }, [knockoutSize, knockoutPairing]);
 
     const groupRankOptions = useMemo(() => {
       const options: string[] = [];
