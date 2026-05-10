@@ -385,8 +385,15 @@ export default function App() {
     if (!currentMatch) return;
 
     // Use passed scores instead of state to avoid race conditions with onSnapshot
+    if (s1 === s2) {
+      alert('Tỉ số hòa không được chấp nhận trong vòng trực tiếp. Vui lòng xác định người thắng.');
+      return;
+    }
+
     const winnerId = s1 > s2 ? currentMatch.team1Id : currentMatch.team2Id;
-    const oldWinnerId = currentMatch.isCompleted ? (currentMatch.score1 > currentMatch.score2 ? currentMatch.team1Id : currentMatch.team2Id) : null;
+    const oldWinnerId = currentMatch.isCompleted 
+      ? (currentMatch.score1 > currentMatch.score2 ? currentMatch.team1Id : (currentMatch.score2 > currentMatch.score1 ? currentMatch.team2Id : null)) 
+      : null;
 
     try {
       const batch = writeBatch(db);
@@ -395,7 +402,8 @@ export default function App() {
       batch.set(doc(db, 'tournaments', selectedTournamentId!, 'matches', currentMatch.id), {
         score1: s1,
         score2: s2,
-        isCompleted: true
+        isCompleted: true,
+        winnerId: winnerId // Explicitly track winnerId to avoid confusion
       }, { merge: true });
 
       let nextMatchIdx = -1;
@@ -777,19 +785,40 @@ export default function App() {
     const [knockoutPairing, setKnockoutPairing] = useState<'auto' | 'manual'>('auto');
     
     const getManualSlotsSize = (size: number) => {
-      // Total slots for all matches except final
-      // size=4: 2 matches (4 slots)
-      // size=8: 4+2 matches (12 slots)
-      // size=16: 8+4+2 matches (28 slots)
       return (size - 2) * 2;
     };
 
-    const [manualSlots, setManualSlots] = useState<string[]>(Array(getManualSlotsSize(4)).fill('1A'));
+    const generateDefaultSlots = (size: number) => {
+      const slots = [];
+      const groups = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+      
+      if (size === 4) {
+        // BK: 2 matches (4 slots)
+        slots.push('1A', '2B', '1B', '2A');
+      } else if (size === 8) {
+        // TK: 4 matches (8 slots)
+        slots.push('1A', '2B', '1C', '2D', '1B', '2A', '1D', '2C');
+        // BK: 2 matches (4 slots)
+        slots.push('Winner KO-0', 'Winner KO-1', 'Winner KO-2', 'Winner KO-3');
+      } else if (size === 16) {
+        // 1/8: 8 matches (16 slots)
+        for (let i = 0; i < 8; i++) {
+          slots.push(`1${groups[i]}`, `2${groups[(i+1)%8]}`);
+        }
+        // TK: 4 matches (8 slots)
+        for (let i = 0; i < 8; i++) slots.push(`Winner KO-${i}`);
+        // BK: 2 matches (4 slots)
+        for (let i = 8; i < 12; i++) slots.push(`Winner KO-${i}`);
+      }
+      return slots;
+    };
+
+    const [manualSlots, setManualSlots] = useState<string[]>(generateDefaultSlots(4));
     
     useEffect(() => {
       const requiredSize = getManualSlotsSize(knockoutSize);
       if (manualSlots.length !== requiredSize) {
-        setManualSlots(Array(requiredSize).fill('1A'));
+        setManualSlots(generateDefaultSlots(knockoutSize));
       }
     }, [knockoutSize]);
 
