@@ -284,6 +284,9 @@ export default function App() {
       if (slot.startsWith('Lucky')) {
         return assignedLuckyTeams[slot] || null;
       }
+      if (slot.startsWith('Winner')) {
+        return null; // Teams for later rounds are assigned during progression
+      }
       const rank = parseInt(slot[0]);
       const groupLetter = slot.slice(1);
       const group = state.groups.find(g => g.name.endsWith(groupLetter) || g.id.endsWith(groupLetter));
@@ -296,21 +299,36 @@ export default function App() {
       const batch = writeBatch(db);
       
       if (config.knockoutPairing === 'manual' && config.manualSlots) {
+        // config.manualSlots.length / 2 is the total count of matches configured manually
         for (let i = 0; i < config.manualSlots.length; i += 2) {
           const t1Id = getTeamBySlot(config.manualSlots[i]);
           const t2Id = getTeamBySlot(config.manualSlots[i+1]);
-          if (t1Id && t2Id) {
-            const matchId = `KO-${i/2}`;
-            batch.set(doc(db, 'tournaments', selectedTournamentId!, 'matches', matchId), {
-              id: matchId,
-              team1Id: t1Id,
-              team2Id: t2Id,
-              score1: 0,
-              score2: 0,
-              isCompleted: false,
-              stage: 'knockout'
-            });
-          }
+          const matchId = `KO-${i/2}`;
+          
+          batch.set(doc(db, 'tournaments', selectedTournamentId!, 'matches', matchId), {
+            id: matchId,
+            team1Id: t1Id,
+            team2Id: t2Id,
+            score1: 0,
+            score2: 0,
+            isCompleted: false,
+            stage: 'knockout'
+          });
+        }
+        // Also create the final match if it's not in manualSlots
+        const totalMatches = config.knockoutSize - 1;
+        const configuredMatches = config.manualSlots.length / 2;
+        if (configuredMatches < totalMatches) {
+          const finalMatchId = `KO-${totalMatches - 1}`;
+          batch.set(doc(db, 'tournaments', selectedTournamentId!, 'matches', finalMatchId), {
+            id: finalMatchId,
+            team1Id: null,
+            team2Id: null,
+            score1: 0,
+            score2: 0,
+            isCompleted: false,
+            stage: 'knockout'
+          });
         }
       } else {
         // Automatic pairing logic
@@ -383,29 +401,56 @@ export default function App() {
       let nextMatchIdx = -1;
       let slotInNextMatch = 1; // 1 or 2
 
-      if (knockoutSize === 4) {
-        if (currentMatchIdx < 2) {
-          nextMatchIdx = 2;
-          slotInNextMatch = (currentMatchIdx % 2) + 1;
+      if (state.config.knockoutPairing === 'manual' && state.config.manualSlots) {
+        // Find if any match in manualSlots uses the current match result as seed
+        const sourceStr = `Winner KO-${currentMatchIdx}`;
+        const slotIdx = state.config.manualSlots.indexOf(sourceStr);
+        if (slotIdx !== -1) {
+          nextMatchIdx = Math.floor(slotIdx / 2);
+          slotInNextMatch = (slotIdx % 2) + 1;
+        } else {
+          // If not in manualSlots, it might be heading to the final
+          // Standard final progression:
+          // size=8: 4, 5 -> 6
+          // size=16: 12, 13 -> 14
+          // size=4: 0, 1 -> 2
+          if (knockoutSize === 4 && currentMatchIdx < 2) {
+            nextMatchIdx = 2;
+            slotInNextMatch = (currentMatchIdx % 2) + 1;
+          } else if (knockoutSize === 8 && (currentMatchIdx === 4 || currentMatchIdx === 5)) {
+            nextMatchIdx = 6;
+            slotInNextMatch = (currentMatchIdx === 4 ? 1 : 2);
+          } else if (knockoutSize === 16 && (currentMatchIdx === 12 || currentMatchIdx === 13)) {
+            nextMatchIdx = 14;
+            slotInNextMatch = (currentMatchIdx === 12 ? 1 : 2);
+          }
         }
-      } else if (knockoutSize === 8) {
-        if (currentMatchIdx < 4) {
-          nextMatchIdx = 4 + Math.floor(currentMatchIdx / 2);
-          slotInNextMatch = (currentMatchIdx % 2) + 1;
-        } else if (currentMatchIdx < 6) {
-          nextMatchIdx = 6;
-          slotInNextMatch = (currentMatchIdx % 2) + 1;
-        }
-      } else if (knockoutSize === 16) {
-        if (currentMatchIdx < 8) {
-          nextMatchIdx = 8 + Math.floor(currentMatchIdx / 2);
-          slotInNextMatch = (currentMatchIdx % 2) + 1;
-        } else if (currentMatchIdx < 12) {
-          nextMatchIdx = 12 + Math.floor((currentMatchIdx - 8) / 2);
-          slotInNextMatch = (currentMatchIdx % 2) + 1;
-        } else if (currentMatchIdx < 14) {
-          nextMatchIdx = 14;
-          slotInNextMatch = (currentMatchIdx % 2) + 1;
+      } else {
+        // Automatic hardcoded progression
+        if (knockoutSize === 4) {
+          if (currentMatchIdx < 2) {
+            nextMatchIdx = 2;
+            slotInNextMatch = (currentMatchIdx % 2) + 1;
+          }
+        } else if (knockoutSize === 8) {
+          if (currentMatchIdx < 4) {
+            nextMatchIdx = 4 + Math.floor(currentMatchIdx / 2);
+            slotInNextMatch = (currentMatchIdx % 2) + 1;
+          } else if (currentMatchIdx < 6) {
+            nextMatchIdx = 6;
+            slotInNextMatch = (currentMatchIdx % 2) + 1;
+          }
+        } else if (knockoutSize === 16) {
+          if (currentMatchIdx < 8) {
+            nextMatchIdx = 8 + Math.floor(currentMatchIdx / 2);
+            slotInNextMatch = (currentMatchIdx % 2) + 1;
+          } else if (currentMatchIdx < 12) {
+            nextMatchIdx = 12 + Math.floor((currentMatchIdx - 8) / 2);
+            slotInNextMatch = (currentMatchIdx % 2) + 1;
+          } else if (currentMatchIdx < 14) {
+            nextMatchIdx = 14;
+            slotInNextMatch = (currentMatchIdx % 2) + 1;
+          }
         }
       }
 
@@ -730,12 +775,21 @@ export default function App() {
     const [localGroups, setLocalGroups] = useState<Group[]>([]);
     const [knockoutSize, setKnockoutSize] = useState<4 | 8 | 16>(4);
     const [knockoutPairing, setKnockoutPairing] = useState<'auto' | 'manual'>('auto');
-    const [manualSlots, setManualSlots] = useState<string[]>(Array(4).fill('1A'));
+    
+    const getManualSlotsSize = (size: number) => {
+      // Total slots for all matches except final
+      // size=4: 2 matches (4 slots)
+      // size=8: 4+2 matches (12 slots)
+      // size=16: 8+4+2 matches (28 slots)
+      return (size - 2) * 2;
+    };
+
+    const [manualSlots, setManualSlots] = useState<string[]>(Array(getManualSlotsSize(4)).fill('1A'));
     
     useEffect(() => {
-      // Update manual slots if size changes
-      if (manualSlots.length !== knockoutSize) {
-        setManualSlots(Array(knockoutSize).fill('1A'));
+      const requiredSize = getManualSlotsSize(knockoutSize);
+      if (manualSlots.length !== requiredSize) {
+        setManualSlots(Array(requiredSize).fill('1A'));
       }
     }, [knockoutSize]);
 
@@ -969,43 +1023,69 @@ export default function App() {
           </div>
 
           {knockoutPairing === 'manual' && (
-            <div className="bg-white/5 rounded-3xl p-8 border border-white/10">
-              <h3 className="text-xs font-black uppercase mb-6 text-emerald-400 tracking-widest">Thiết lập cặp đấu thủ công</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                {Array(knockoutSize / 2).fill(0).map((_, i) => (
-                  <div key={i} className="space-y-4">
-                    <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex flex-col gap-3">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-[9px] font-black text-slate-500 uppercase">Match {i + 1}</span>
-                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
-                      </div>
-                      <select 
-                        value={manualSlots[i*2]}
-                        onChange={(e) => {
-                          const newSlots = [...manualSlots];
-                          newSlots[i*2] = e.target.value;
-                          setManualSlots(newSlots);
-                        }}
-                        className="bg-slate-800 text-white rounded-lg p-2 text-xs font-bold outline-none focus:ring-1 focus:ring-emerald-500 border border-white/10"
-                      >
-                        {groupRankOptions.map(opt => <option key={opt} value={opt}>{opt.startsWith('Lucky') ? opt : `Vị trí ${opt}`}</option>)}
-                      </select>
-                      <div className="h-px bg-white/5 w-full my-1" />
-                      <select 
-                        value={manualSlots[i*2+1]}
-                        onChange={(e) => {
-                          const newSlots = [...manualSlots];
-                          newSlots[i*2+1] = e.target.value;
-                          setManualSlots(newSlots);
-                        }}
-                        className="bg-slate-800 text-white rounded-lg p-2 text-xs font-bold outline-none focus:ring-1 focus:ring-emerald-500 border border-white/10"
-                      >
-                        {groupRankOptions.map(opt => <option key={opt} value={opt}>{opt.startsWith('Lucky') ? opt : `Vị trí ${opt}`}</option>)}
-                      </select>
+            <div className="bg-white/5 rounded-3xl p-8 border border-white/10 space-y-12">
+              <h3 className="text-xs font-black uppercase text-emerald-400 tracking-widest text-center">Thiết lập cặp đấu thủ công</h3>
+              
+              {/* Manual Setup Rounds */}
+              {(() => {
+                const rounds: { name: string; matchCount: number; startIndex: number; sourceMatches?: string[] }[] = [];
+                if (knockoutSize === 16) {
+                  rounds.push({ name: 'Vòng 1/8', matchCount: 8, startIndex: 0 });
+                  rounds.push({ name: 'Vòng Tứ kết', matchCount: 4, startIndex: 16, sourceMatches: ['1/8-1', '1/8-2', '1/8-3', '1/8-4', '1/8-5', '1/8-6', '1/8-7', '1/8-8'] });
+                  rounds.push({ name: 'Vòng Bán kết', matchCount: 2, startIndex: 24, sourceMatches: ['TK1', 'TK2', 'TK3', 'TK4'] });
+                } else if (knockoutSize === 8) {
+                  rounds.push({ name: 'Vòng Tứ kết', matchCount: 4, startIndex: 0 });
+                  rounds.push({ name: 'Vòng Bán kết', matchCount: 2, startIndex: 8, sourceMatches: ['Tứ kết 1', 'Tứ kết 2', 'Tứ kết 3', 'Tứ kết 4'] });
+                } else {
+                  rounds.push({ name: 'Vòng Bán kết', matchCount: 2, startIndex: 0 });
+                }
+
+                return rounds.map((round, rIdx) => (
+                  <div key={rIdx} className="space-y-6">
+                    <div className="flex items-center gap-4">
+                      <div className="h-px bg-white/10 flex-1" />
+                      <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">{round.name}</h4>
+                      <div className="h-px bg-white/10 flex-1" />
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                      {Array(round.matchCount).fill(0).map((_, mIdx) => (
+                        <div key={mIdx} className="space-y-4">
+                          <div className="bg-white/5 p-4 rounded-2xl border border-white/5 flex flex-col gap-3">
+                            <span className="text-[9px] font-black text-slate-500 uppercase">Match {round.startIndex / 2 + mIdx + 1}</span>
+                            
+                            {[0, 1].map(pos => (
+                              <select 
+                                key={pos}
+                                value={manualSlots[round.startIndex + mIdx * 2 + pos]}
+                                onChange={(e) => {
+                                  const newSlots = [...manualSlots];
+                                  newSlots[round.startIndex + mIdx * 2 + pos] = e.target.value;
+                                  setManualSlots(newSlots);
+                                }}
+                                className="bg-slate-800 text-white rounded-lg p-2.5 text-[11px] font-bold outline-none focus:ring-1 focus:ring-emerald-500 border border-white/10"
+                              >
+                                {round.sourceMatches ? (
+                                  round.sourceMatches.map((src, sIdx) => (
+                                    <option key={sIdx} value={`Winner KO-${round.startIndex === 8 ? sIdx : (round.startIndex === 16 ? sIdx : (round.startIndex === 24 ? 8 + sIdx : sIdx))}`}>
+                                      Thắng {src}
+                                    </option>
+                                  ))
+                                ) : (
+                                  groupRankOptions.map(opt => (
+                                    <option key={opt} value={opt}>
+                                      {opt.startsWith('Lucky') ? opt : `Vị trí ${opt}`}
+                                    </option>
+                                  ))
+                                )}
+                              </select>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
-                ))}
-              </div>
+                ));
+              })()}
             </div>
           )}
         </div>
@@ -1231,12 +1311,30 @@ export default function App() {
       if (state.stage === 'setup') return 'Đang chờ...';
       
       const config = state.config;
+      const knockoutSize = config.knockoutSize;
       const isAuto = config.knockoutPairing === 'auto';
-      
-      // Only show placeholders for the first round of knockout
-      if (knockoutSize === 4 && mIdx >= 2) return 'Thắng trận ' + (mIdx === 2 ? 'BK' : '');
-      if (knockoutSize === 8 && mIdx >= 4) return 'Thắng trận tứ kết';
-      if (knockoutSize === 16 && mIdx >= 8) return 'Thắng vòng 1/8';
+
+      // Match indexing logic based on advanceToNextRound
+      if (knockoutSize === 4) {
+        if (mIdx === 2) return `Thắng Bán kết ${teamPos}`;
+      } else if (knockoutSize === 8) {
+        if (mIdx >= 4 && mIdx <= 5) {
+          const prevMatchIdx = (mIdx - 4) * 2 + (teamPos - 1);
+          return `Thắng Tứ kết ${prevMatchIdx + 1}`;
+        }
+        if (mIdx === 6) return `Thắng Bán kết ${teamPos}`;
+      } else if (knockoutSize === 16) {
+        if (mIdx >= 8 && mIdx <= 11) {
+          const prevMatchIdx = (mIdx - 8) * 2 + (teamPos - 1);
+          return `Thắng Vòng 1/8 trận ${prevMatchIdx + 1}`;
+        }
+        if (mIdx >= 12 && mIdx <= 13) {
+          const prevMatchIdx = (mIdx - 12) * 2 + (teamPos - 1);
+          // 4 Tứ kết: 8, 9, 10, 11
+          return `Thắng Tứ kết ${prevMatchIdx + 1}`;
+        }
+        if (mIdx === 14) return `Thắng Bán kết ${teamPos}`;
+      }
 
       const groups = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
       
@@ -1251,14 +1349,11 @@ export default function App() {
           if (mIdx === 2) return teamPos === 1 ? 'Nhất bảng B' : 'Nhì bảng A';
           if (mIdx === 3) return teamPos === 1 ? 'Nhất bảng D' : 'Nhì bảng C';
         }
-        // Simplified for 16
         if (knockoutSize === 16) {
-           const groupIdx = Math.floor(mIdx / 2) * 2;
            if (mIdx % 2 === 0) return teamPos === 1 ? `Nhất bảng ${groups[mIdx]}` : `Nhì bảng ${groups[mIdx+1]}`;
            return teamPos === 1 ? `Nhất bảng ${groups[mIdx]}` : `Nhì bảng ${groups[mIdx-1]}`;
         }
       } else {
-        // Manual allocation usually follows a fixed slot system
         return `Vị trí ${mIdx * 2 + teamPos}`;
       }
       
