@@ -1,0 +1,6 @@
+{
+  "name": "Pickleball Tournament Master",
+  "description": "Ứng dụng quản lý giải đấu Pickleball chuyên nghiệp: Quản lý VĐV, chia bảng tự động, tính điểm và sơ đồ nhánh knockout.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
